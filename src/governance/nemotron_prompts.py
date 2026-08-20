@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+# Python 3.10 compatibility: StrEnum was added in 3.11
+try:
+    from enum import StrEnum
+except ImportError:
+    from enum import Enum
+    class StrEnum(str, Enum):
+        pass
 from pathlib import Path
 from string import Template
 from typing import Any
