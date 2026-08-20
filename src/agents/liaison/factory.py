@@ -45,7 +45,7 @@ async def create_liaison_agent(config: Optional[LiaisonConfig] = None) -> Liaiso
     # Event Store
     event_store = await get_event_store(config.event_store_path)
 
-    # Create agent
+    # Create agent (session_id will be auto-generated/loaded by agent)
     agent = LiaisonAgent(
         config=config,
         router=router,
