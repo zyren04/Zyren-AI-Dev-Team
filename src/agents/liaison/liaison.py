@@ -16,7 +16,7 @@ from google.genai import types
 
 from .config import LiaisonConfig
 from .voice.facade import VoiceFacade
-from .reasoning.core import ReasoningCore
+from .reasoning.core import ReasoningCore, ReasoningResult
 from .session import SessionResumptionManager
 from .controls import VoiceLifecycleController, VoiceState, VoiceSessionResult
 from .dispatch_gate import PlannerDispatchGate, DispatchDecision
@@ -70,6 +70,23 @@ class LiaisonAgent:
         self._conversation_history: List[Dict] = []
         self._pending_delegations: Dict[str, asyncio.Future] = {}
         self._event_store = event_store
+        self._last_thought: Optional[str] = None
+
+    async def initialize(self):
+        """Initialize all components and load conversation history."""
+        logger.info("Liaison Agent initialized")
+        
+        # Load or create session ID
+        if not self.session_id:
+            self.session_id = self._load_or_create_session_id()
+        
+        # Load conversation history from EventStore
+        if self.config.session.enabled and self._event_store:
+            await self._load_conversation_history()
+
+    def get_last_thought(self) -> Optional[str]:
+        """Get the last extracted thinking trace from the Reasoning Core."""
+        return self._last_thought
 
     async def initialize(self):
         """Initialize all components and load conversation history."""
@@ -140,50 +157,28 @@ class LiaisonAgent:
         except Exception as e:
             logger.warning(f"Failed to load conversation history: {e}")
 
-    async def _save_conversation_turn(self, user_input: str, agent_response: str):
+    async def _save_conversation_turn(self, user_input: str, agent_response: str, thought: Optional[str] = None):
         """Save a conversation turn to EventStore."""
         if not self.config.session.enabled or not self._event_store or not self.config.session.auto_save:
             return
         
         try:
+            payload = {
+                "user_input": user_input,
+                "agent_response": agent_response,
+            }
+            if thought is not None:
+                payload["thought"] = thought
+            
             await self._event_store.record_event(
                 execution_id=self.session_id,
                 event_type="liaison_conversation_turn",
-                payload={
-                    "user_input": user_input,
-                    "agent_response": agent_response,
-                    "timestamp": asyncio.get_event_loop().time()
-                },
+                payload=payload,
                 node_name="liaison_agent",
                 iteration=len(self._conversation_history)
             )
         except Exception as e:
             logger.warning(f"Failed to save conversation turn: {e}")
-
-    async def start_voice(self) -> VoiceSessionResult:
-        """Start voice session."""
-        return await self.voice.start_session()
-
-    async def stop_voice(self) -> VoiceSessionResult:
-        """Stop voice session."""
-        return await self.voice.stop_session()
-
-    async def mute_microphone(self) -> VoiceSessionResult:
-        return await self.voice.mute_microphone()
-
-    async def unmute_microphone(self) -> VoiceSessionResult:
-        return await self.voice.unmute_microphone()
-
-    async def toggle_camera(self, enabled: bool) -> VoiceSessionResult:
-        return await self.voice.toggle_camera(enabled)
-
-    async def toggle_screen_share(self, enabled: bool) -> VoiceSessionResult:
-        return await self.voice.toggle_screen_share(enabled)
-
-    async def send_text(self, text: str):
-        """Send text input (for non-voice interaction)."""
-        await self.voice.send_text(text)
-        self._conversation_history.append({"role": "user", "content": text})
 
     def _build_conversation_context(self) -> str:
         """Build conversation context string from history."""
@@ -213,13 +208,20 @@ class LiaisonAgent:
             prompt_with_context = text
         
         self._conversation_history.append({"role": "user", "content": text})
-        response = await self.reasoning.reason(prompt_with_context, task_type="auto")
-        self._conversation_history.append({"role": "assistant", "content": response})
         
-        # Save to EventStore
-        await self._save_conversation_turn(text, response)
+        # Get reasoning result with thinking extraction
+        result: ReasoningResult = await self.reasoning.reason(prompt_with_context, task_type="auto")
         
-        return response
+        # Store the thought for retrieval
+        self._last_thought = result.thought
+        
+        # Store only the clean final response in conversation history
+        self._conversation_history.append({"role": "assistant", "content": result.final_response})
+        
+        # Save to EventStore with optional thought in metadata
+        await self._save_conversation_turn(text, result.final_response, result.thought)
+        
+        return result.final_response
 
     async def delegate_to_reasoning(
         self,
@@ -228,7 +230,7 @@ class LiaisonAgent:
         preferred_model: str = "auto",
         require_verification: bool = True,
         max_tokens: int = 8192,
-    ) -> str:
+    ) -> ReasoningResult:
         """Delegate task to Reasoning Core (called by Voice Facade via tool)."""
         return await self.reasoning.delegate_task(
             task_type=task_type,

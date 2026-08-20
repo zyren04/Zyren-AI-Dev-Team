@@ -53,6 +53,17 @@ class LiaisonCLI:
                     await self._handle_voice_command(user_input[7:])
                 else:
                     response = await self.agent.process_text(user_input)
+                    
+                    # Check if there's a thinking trace to display
+                    thought = self.agent.get_last_thought()
+                    if thought:
+                        console.print(Panel(
+                            thought,
+                            title="🧠 Thinking Process",
+                            border_style="dim white",
+                            style="dim"
+                        ))
+                    
                     console.print(f"[bold green]Liaison[/bold green]: {response}")
 
             except KeyboardInterrupt:
