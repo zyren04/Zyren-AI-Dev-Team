@@ -1,8 +1,8 @@
 specVersion: v2
 specMinorVersion: 2
 meta:
-    name: Zyren-NeMo-Chassis
-    image: project-zyren-neno-chassis
+    name: Zyren-AI-Dev-Team
+    image: project-zyren-ai-dev-team
     description: ""
     labels: []
     createdOn: "2026-08-16T00:59:23Z"
